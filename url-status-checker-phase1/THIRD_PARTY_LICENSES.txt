@@ -1,0 +1,50 @@
+# Third-Party Dependencies and Licenses
+
+This project depends on the following open-source libraries. All are permissively licensed (BSD or MIT), making them safe for academic, personal, and commercial use.
+
+---
+
+## Direct Dependencies
+
+1. **Flask**  
+   License: BSD-3-Clause  
+   Source: https://palletsprojects.com/p/flask/
+
+2. **httpx**  
+   License: BSD-3-Clause  
+   Source: https://www.python-httpx.org/
+
+3. **pandas**  
+   License: BSD-3-Clause  
+   Source: https://pandas.pydata.org/
+
+4. **openpyxl**  
+   License: MIT  
+   Source: https://openpyxl.readthedocs.io/
+
+5. **python-dotenv**  
+   License: BSD-3-Clause  
+   Source: https://saurabh-kumar.com/python-dotenv/
+
+---
+
+## Indirect Dependencies (installed automatically)
+
+- **Werkzeug** – BSD-3-Clause  
+- **Jinja2** – BSD-3-Clause  
+- **ItsDangerous** – BSD-3-Clause  
+- **Click** – BSD-3-Clause  
+- **numpy** – BSD-3-Clause  
+- **httpcore** – BSD-3-Clause  
+- **sniffio** – MIT  
+- **anyio** – MIT  
+- **idna** – BSD-like (permissive)  
+- **certifi** – MPL 2.0 (permissive, allows commercial use)  
+
+---
+
+## Notes
+
+- All licenses above are permissive (BSD, MIT, MPL).  
+- No copyleft (GPL/LGPL) libraries are used.  
+
