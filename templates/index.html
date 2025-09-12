@@ -1,15 +1,167 @@
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>URL checking Website</title>
-    </head>
-    <body>
-    <h1>Upload your URL.xlsx file</h1>
-    <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="file" name="file">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Checking Website</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        #progress-container {
+            width: 80%;
+            max-width: 600px;
+            margin: 20px auto;
+            border: 1px solid #ccc;
+            padding: 20px;
+            background-color: #f9f9f9;
+            text-align: center;
+        }
+        #progress-status {
+            font-size: 1.5em;
+            color: #333;
+        }
+        #download-area {
+            width: 80%;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid #ccc;
+            background-color: #f0f9f2; /* A light green to indicate success */
+        }
+        #download-area a, #download-area button {
+            display: inline-block;
+            margin: 10px;
+            padding: 10px 15px;
+            text-decoration: none;
+            font-size: 1.1em;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #download-link {
+             background-color: #28a745;
+             color: white;
+        }
+        #reset-button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+        }
+        .message-log {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload your URL file (.xlsx or .csv)</h1>
+    <p>The first column of your file should contain the URLs to be checked.</p>
+    <form id="upload-form" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".xlsx,.csv">
         <input type="submit" value="Upload and Process">
     </form>
+
+    <div id="progress-container" style="display: none;">
+        <h3 id="progress-status">Starting...</h3>
+        <div id="message-log" class="message-log"></div>
+    </div>
+
+    <div id="download-area" style="display: none;">
+        <h3>Processing complete!</h3>
+        <a id="download-link">Download the updated file</a>
+        <button id="reset-button">Process Another File</button>
+    </div>
+
+    <script>
+        document.getElementById('upload-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const formData = new FormData(form);
+            const fileInput = form.querySelector('input[type="file"]');
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Please select a file to upload.');
+                return;
+            }
+
+            const progressContainer = document.getElementById('progress-container');
+            const progressStatus = document.getElementById('progress-status');
+            const messageLog = document.getElementById('message-log');
+            const downloadArea = document.getElementById('download-area');
+            const downloadLink = document.getElementById('download-link');
+
+            progressContainer.style.display = 'block';
+            progressStatus.textContent = 'Uploading and preparing...';
+            messageLog.innerHTML = '';
+            downloadArea.style.display = 'none';
+            form.style.display = 'none';
+
+            let totalUrls = 0;
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Upload failed: ${errorText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data:')) {
+                            const data = JSON.parse(line.substring(5));
+
+                            if (data.message) {
+                                messageLog.textContent = data.message;
+                            }
+                            
+                            if (data.total !== undefined) {
+                                totalUrls = data.total;
+                                if (totalUrls > 0) {
+                                    progressStatus.textContent = `0 / ${totalUrls} has been checked`;
+                                } else {
+                                    progressStatus.textContent = 'No URLs found to check.';
+                                }
+                            }
+
+                            if (data.checked !== undefined) {
+                                progressStatus.textContent = `${data.checked} / ${totalUrls} has been checked`;
+                            }
+
+                            if (data.done) {
+                                if (totalUrls > 0) {
+                                    progressStatus.textContent = `All ${totalUrls} URLs have been checked!`;
+                                }
+                                downloadLink.href = `/download/${data.filename}`;
+                                downloadArea.style.display = 'block';
+                                return; 
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                progressStatus.textContent = 'An error occurred!';
+                messageLog.innerHTML = `<span style="color: red;"><strong>Error:</strong> ${error.message}</span>`;
+                form.style.display = 'block';
+            }
+        });
+
+        document.getElementById('reset-button').addEventListener('click', function() {
+            location.reload();
+        });
+    </script>
 </body>
-    </html>
+</html>
