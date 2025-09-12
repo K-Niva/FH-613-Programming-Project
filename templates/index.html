@@ -1,63 +1,16 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>URL Checking Website</title>
-    <style>
-        body { font-family: sans-serif; margin: 2em; }
-        #progress-container {
-            width: 80%;
-            max-width: 600px;
-            margin: 20px auto;
-            border: 1px solid #ccc;
-            padding: 20px;
-            background-color: #f9f9f9;
-            text-align: center;
-        }
-        #progress-status {
-            font-size: 1.5em;
-            color: #333;
-        }
-        #download-area {
-            width: 80%;
-            max-width: 600px;
-            margin: 20px auto;
-            padding: 20px;
-            text-align: center;
-            border: 1px solid #ccc;
-            background-color: #f0f9f2; /* A light green to indicate success */
-        }
-        #download-area a, #download-area button {
-            display: inline-block;
-            margin: 10px;
-            padding: 10px 15px;
-            text-decoration: none;
-            font-size: 1.1em;
-            cursor: pointer;
-            border-radius: 5px;
-        }
-        #download-link {
-             background-color: #28a745;
-             color: white;
-        }
-        #reset-button {
-            background-color: #007bff;
-            color: white;
-            border: none;
-        }
-        .message-log {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 15px;
-        }
-    </style>
-</head>
-<body>
-    <h1>Upload your URL file (.xlsx or .csv)</h1>
-    <p>The first column of your file should contain the URLs to be checked.</p>
-    <form id="upload-form" enctype="multipart/form-data">
-        <input type="file" name="file" accept=".xlsx,.csv">
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>RMIT Marketing Ad URL</title>
+    </head>
+    <body>
+    <h1>RMIT Marketing Ad URL Scanning System</h1>
+    <br>
+    <h2>Upload your URL.xlsx file</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file">
         <input type="submit" value="Upload and Process">
     </form>
 
