@@ -10,12 +10,11 @@ from zoneinfo import ZoneInfo
 import httpx
 import pandas as pd
 
-# --- Configuration (from status_checker.py and your app) ---
+
 UPLOAD_FOLDER = 'uploads'
 DOWNLOAD_FOLDER = 'downloads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
 
-# Settings from status_checker.py
 DEFAULT_ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "rmit.edu.au")
 DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.10"))
@@ -23,18 +22,17 @@ USER_AGENT = os.getenv("USER_AGENT", "URLStatusChecker/1.0 (FlaskWebApp)")
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
-# --- Flask App Setup ---
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
 app.secret_key = 'supersecretkey'
 
-# Create directories if they don't exist
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 
-# --- Helper Functions (from status_checker.py) ---
+
 def allowed_file(filename):
     """Checks if the file extension is allowed."""
     return '.' in filename and \
@@ -98,7 +96,6 @@ def _now_melbourne_iso() -> str:
     return dt.datetime.now(MELBOURNE_TZ).replace(microsecond=0).isoformat()
 
 
-# --- Core Processing Logic with Streaming ---
 def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
     """
     Processes a DataFrame of URLs and yields progress updates as Server-Sent Events.
@@ -110,11 +107,11 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
                 raise ValueError("Could not detect a URL column. Please name it 'URL', 'Link', or similar.")
 
             total_urls = len(df)
-            skipped_count = 0 # <-- Initialize skipped counter
+            skipped_count = 0 
             yield f'data: {json.dumps({"message": f"Found {total_urls} rows in {original_filename}"})}\n\n'
             yield f'data: {json.dumps({"total": total_urls})}\n\n'
 
-            # Prepare output columns
+            
             df["checking_time"] = ""
             df["status_code"] = ""
             df["final_url"] = ""
@@ -154,7 +151,7 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
             else:
                 df.to_csv(output_filepath, index=False)
 
-            # <-- Add skipped_count to the final payload
+            
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
         
         except Exception as e:
@@ -164,7 +161,7 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
     return generate()
 
 
-# --- Flask Routes ---
+
 @app.route('/')
 def index():
     return render_template('index.html')
