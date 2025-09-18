@@ -2,6 +2,7 @@ import os
 import time
 import json
 import datetime as dt
+import logging # <-- ADDED IMPORT
 from flask import Flask, render_template, request, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse
@@ -27,6 +28,13 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
 app.secret_key = 'supersecretkey'
 
+# --- ADDED LOGGING CONFIGURATION ---
+# This ensures logs are visible when running with Gunicorn
+if __name__ != '__main__':
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+# ------------------------------------
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
@@ -102,8 +110,10 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
     """
     def generate():
         try:
+            app.logger.info("Starting stream generation for file: %s", original_filename)
             url_col = _detect_url_column(df)
             if not url_col:
+                app.logger.error("Could not detect a URL column in the uploaded file.")
                 raise ValueError("Could not detect a URL column. Please name it 'URL', 'Link', or similar.")
 
             total_urls = len(df)
@@ -121,15 +131,20 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
 
             headers = {"User-Agent": USER_AGENT}
             
+            app.logger.info("Beginning URL processing loop for %d URLs.", total_urls)
             with httpx.Client(headers=headers) as client:
                 for idx, row in df.iterrows():
                     raw_url = str(row[url_col] or "")
                     url = _normalize_url(raw_url)
 
+                    # --- THIS IS THE CRITICAL LOGGING LINE ---
+                    app.logger.info(f"Processing URL #{idx + 1}/{total_urls}: {url}")
+                    # -----------------------------------------
+
                     if not url or not _is_allowed_host(url, DEFAULT_ALLOWED_DOMAIN):
                         df.at[idx, "checking_time"] = _now_melbourne_iso()
                         df.at[idx, "error"] = f"Skipped: not a valid {DEFAULT_ALLOWED_DOMAIN} URL"
-                        skipped_count += 1 # <-- Increment skipped counter
+                        skipped_count += 1
                     else:
                         status_code, final_url, err, elapsed_ms, redirected = _head_then_get_status(client, url, timeout=DEFAULT_TIMEOUT)
                         df.at[idx, "checking_time"] = _now_melbourne_iso()
@@ -141,7 +156,8 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
                         time.sleep(REQUEST_DELAY)
                     
                     yield f'data: {json.dumps({"checked": idx + 1})}\n\n'
-
+            
+            app.logger.info("URL processing loop finished. Preparing to save file.")
             base, ext = os.path.splitext(original_filename)
             output_filename = f"{base}_processed{ext}"
             output_filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], output_filename)
@@ -150,11 +166,12 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
                 df.to_excel(output_filepath, index=False, engine="openpyxl")
             else:
                 df.to_csv(output_filepath, index=False)
-
             
+            app.logger.info("File successfully saved to: %s", output_filepath)
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
         
         except Exception as e:
+            app.logger.error("An exception occurred during stream processing: %s", e, exc_info=True)
             error_message = f"An error occurred during processing: {e}"
             yield f'data: {json.dumps({"error": error_message})}\n\n'
 
