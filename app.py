@@ -24,18 +24,15 @@ REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.10"))
 USER_AGENT = os.getenv("USER_AGENT", "URLStatusChecker/1.0 (FlaskWebApp)")
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
-# --- S3 CONFIG ---
-S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data-nv123")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
 S3_SOURCE_PREFIX = "source/"
 s3_client = boto3.client("s3")
 
-# --- Flask app setup ---
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
 app.secret_key = 'supersecretkey'
 
-# --- Logging setup for gunicorn ---
 if __name__ != '__main__':
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
