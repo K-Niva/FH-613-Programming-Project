@@ -3,10 +3,16 @@ import time
 import json
 import datetime as dt
 import logging
+import smtplib
+import ssl
 from flask import Flask, render_template, request, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
 import httpx
 import pandas as pd
 import boto3
@@ -25,9 +31,8 @@ MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
 S3_SOURCE_PREFIX = "source/"
-
 s3_client = boto3.client("s3")
-ses_client = boto3.client("ses", region_name="ap-southeast-2")  # SES client
+
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -41,8 +46,6 @@ if __name__ != '__main__':
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-# ------------------- HELPER FUNCTIONS -------------------
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -99,28 +102,41 @@ def _detect_url_column(df: pd.DataFrame) -> str:
 def _now_melbourne_iso() -> str:
     return dt.datetime.now(MELBOURNE_TZ).replace(microsecond=0).isoformat()
 
-def send_email(recipient: str, filename: str):
-    """Send email to the user once file is processed."""
-    subject = "Your URL Scan Report is Ready"
-    body_text = (
-        f"Hello,\n\n"
-        f"Your file '{filename}' has been processed successfully.\n"
-        f"You can download it from the application.\n\n"
-        f"Regards,\nRMIT URL Scan Service"
-    )
+
+def send_email_with_attachment(recipient_email, subject, body_text, file_path):
+    """
+    Sends an email with an attachment using smtplib.
+    """
+    if not all([SMTP_SERVER, SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD]):
+        app.logger.error("SMTP settings are not fully configured. Cannot send email.")
+        return
+
+    msg = MIMEMultipart()
+    msg['Subject'] = subject
+    msg['From'] = SMTP_SENDER_EMAIL
+    msg['To'] = recipient_email
+
+    msg.attach(MIMEText(body_text, 'plain'))
+
 
     try:
-        response = ses_client.send_email(
-            Source="noreply@yourdomain.com",  # Must be verified in SES
-            Destination={"ToAddresses": [recipient]},
-            Message={
-                "Subject": {"Data": subject},
-                "Body": {"Text": {"Data": body_text}}
-            },
-        )
-        app.logger.info(f"Email sent to {recipient}, MessageId: {response['MessageId']}")
-    except ClientError as e:
-        app.logger.error("Failed to send email: %s", e)
+        with open(file_path, 'rb') as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+        msg.attach(part)
+    except FileNotFoundError:
+        app.logger.error(f"Attachment file not found at path: {file_path}")
+        return
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+            server.login(SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD)
+            server.send_message(msg)
+            app.logger.info(f"Email sent successfully to {recipient_email}")
+    except Exception as e:
+        app.logger.error(f"Failed to send email to {recipient_email}: {e}")
+
 
 def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient_email: str):
     def generate():
@@ -156,9 +172,7 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
                         df.at[idx, "error"] = f"Skipped: not a valid {DEFAULT_ALLOWED_DOMAIN} URL"
                         skipped_count += 1
                     else:
-                        status_code, final_url, err, elapsed_ms, redirected = _head_then_get_status(
-                            client, url, timeout=DEFAULT_TIMEOUT
-                        )
+                        status_code, final_url, err, elapsed_ms, redirected = _head_then_get_status(client, url, timeout=DEFAULT_TIMEOUT)
                         df.at[idx, "checking_time"] = _now_melbourne_iso()
                         df.at[idx, "status_code"] = status_code if status_code else "N/A"
                         df.at[idx, "final_url"] = final_url
@@ -170,7 +184,7 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
                     yield f'data: {json.dumps({"checked": idx + 1})}\n\n'
 
             base, ext = os.path.splitext(original_filename)
-            output_filename = f"{base}_processed{ext}"
+            output_filename = f"{base}_processed_{dt.datetime.now(MELBOURNE_TZ).strftime('%Y%m%d_%H%M%S')}{ext}"
             output_filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], output_filename)
 
             if original_filename.endswith('.xlsx'):
@@ -178,10 +192,20 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
             else:
                 df.to_csv(output_filepath, index=False)
 
-            # Send notification email
-            send_email(recipient_email, output_filename)
-
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
+
+            email_subject = f"URL Scan Report for {original_filename}"
+            email_body = f"""
+Hello,
+
+Please find the attached report for the URL scan of the file '{original_filename}'.
+
+Total URLs processed: {total_urls}
+URLs skipped: {skipped_count}
+
+This is an automated message.
+"""
+            send_email_with_attachment(recipient_email, email_subject, email_body, output_filepath)
 
         except Exception as e:
             app.logger.error("Exception in processing: %s", e, exc_info=True)
@@ -189,11 +213,11 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
 
     return generate()
 
-# ------------------- ROUTES -------------------
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -211,7 +235,6 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # --- Upload original file to S3 with recipient email metadata ---
         s3_key = f"{S3_SOURCE_PREFIX}{filename}"
         try:
             extra_args = {
@@ -219,6 +242,7 @@ def upload_file():
                     'recipient-email': email
                 }
             }
+
             s3_client.upload_file(filepath, S3_BUCKET_NAME, s3_key, ExtraArgs=extra_args)
             app.logger.info(f"Uploaded {s3_key} to S3 with recipient {email}")
         except ClientError as e:
@@ -238,13 +262,14 @@ def upload_file():
 
         except Exception as e:
             return Response(f"Failed to read or process file: {e}", status=500)
-
     else:
         return Response(f"Allowed file types are: {', '.join(ALLOWED_EXTENSIONS)}", status=400)
+
 
 @app.route('/download/<filename>')
 def download_file(filename):
     return send_from_directory(app.config['DOWNLOAD_FOLDER'], filename, as_attachment=True)
+
 
 if __name__ == '__main__':
     app.run(debug=True)
