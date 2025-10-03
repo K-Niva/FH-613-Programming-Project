@@ -36,7 +36,7 @@ s3_client = boto3.client("s3")
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 SMTP_SENDER_EMAIL = "kandn203@gmail.com"
-SMTP_SENDER_PASSWORD = "gvgo ugcd gtqw gbjm"
+SMTP_SENDER_PASSWORD = "our_gmail_app_password"
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
