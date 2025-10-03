@@ -33,11 +33,10 @@ S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
 S3_SOURCE_PREFIX = "source/"
 s3_client = boto3.client("s3")
 
-# --- New SMTP Configuration (using Environment Variables for Security) ---
-SMTP_SERVER = os.getenv("SMTP_SERVER")  # E.g., "smtp.gmail.com"
-SMTP_PORT = int(os.getenv("SMTP_PORT", 465)) # Standard port for SMTPS
-SMTP_SENDER_EMAIL = os.getenv("kandn203@gmail.com") # Your email address
-SMTP_SENDER_PASSWORD = os.getenv("Aussieline123!") # Your email password or App Password
+SMTP_SERVER = os.getenv("SMTP_SERVER")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
+SMTP_SENDER_EMAIL = os.getenv("kandn203@gmail.com")
+SMTP_SENDER_PASSWORD = os.getenv("Apple1172!")
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -52,8 +51,6 @@ if __name__ != '__main__':
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-
-# ------------------- HELPER FUNCTIONS -------------------
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -123,10 +120,9 @@ def send_email_with_attachment(recipient_email, subject, body_text, file_path):
     msg['From'] = SMTP_SENDER_EMAIL
     msg['To'] = recipient_email
 
-    # Email body
     msg.attach(MIMEText(body_text, 'plain'))
 
-    # Attachment
+
     try:
         with open(file_path, 'rb') as f:
             part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
@@ -202,7 +198,6 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
 
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
 
-            # --- Send Email with Attachment ---
             email_subject = f"URL Scan Report for {original_filename}"
             email_body = f"""
 Hello,
@@ -223,7 +218,6 @@ This is an automated message.
     return generate()
 
 
-# ------------------- ROUTES -------------------
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -245,7 +239,6 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        # --- Upload original file to S3 with recipient email metadata ---
         s3_key = f"{S3_SOURCE_PREFIX}{filename}"
         try:
             extra_args = {
