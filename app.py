@@ -3,10 +3,15 @@ import time
 import json
 import datetime as dt
 import logging
+import smtplib
+import ssl
 from flask import Flask, render_template, request, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
 import httpx
 import pandas as pd
@@ -27,6 +32,12 @@ MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
 S3_SOURCE_PREFIX = "source/"
 s3_client = boto3.client("s3")
+
+# --- New SMTP Configuration (using Environment Variables for Security) ---
+SMTP_SERVER = os.getenv("SMTP_SERVER")  # E.g., "smtp.gmail.com"
+SMTP_PORT = int(os.getenv("SMTP_PORT", 465)) # Standard port for SMTPS
+SMTP_SENDER_EMAIL = os.getenv("kandn203@gmail.com") # Your email address
+SMTP_SENDER_PASSWORD = os.getenv("Aussieline123!") # Your email password or App Password
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -99,7 +110,43 @@ def _now_melbourne_iso() -> str:
     return dt.datetime.now(MELBOURNE_TZ).replace(microsecond=0).isoformat()
 
 
-def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
+def send_email_with_attachment(recipient_email, subject, body_text, file_path):
+    """
+    Sends an email with an attachment using smtplib.
+    """
+    if not all([SMTP_SERVER, SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD]):
+        app.logger.error("SMTP settings are not fully configured. Cannot send email.")
+        return
+
+    msg = MIMEMultipart()
+    msg['Subject'] = subject
+    msg['From'] = SMTP_SENDER_EMAIL
+    msg['To'] = recipient_email
+
+    # Email body
+    msg.attach(MIMEText(body_text, 'plain'))
+
+    # Attachment
+    try:
+        with open(file_path, 'rb') as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+        msg.attach(part)
+    except FileNotFoundError:
+        app.logger.error(f"Attachment file not found at path: {file_path}")
+        return
+
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+            server.login(SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD)
+            server.send_message(msg)
+            app.logger.info(f"Email sent successfully to {recipient_email}")
+    except Exception as e:
+        app.logger.error(f"Failed to send email to {recipient_email}: {e}")
+
+
+def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient_email: str):
     def generate():
         try:
             app.logger.info("Starting stream generation for file: %s", original_filename)
@@ -145,7 +192,7 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
                     yield f'data: {json.dumps({"checked": idx + 1})}\n\n'
 
             base, ext = os.path.splitext(original_filename)
-            output_filename = f"{base}_processed{ext}"
+            output_filename = f"{base}_processed_{dt.datetime.now(MELBOURNE_TZ).strftime('%Y%m%d_%H%M%S')}{ext}"
             output_filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], output_filename)
 
             if original_filename.endswith('.xlsx'):
@@ -154,6 +201,20 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
                 df.to_csv(output_filepath, index=False)
 
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
+
+            # --- Send Email with Attachment ---
+            email_subject = f"URL Scan Report for {original_filename}"
+            email_body = f"""
+Hello,
+
+Please find the attached report for the URL scan of the file '{original_filename}'.
+
+Total URLs processed: {total_urls}
+URLs skipped: {skipped_count}
+
+This is an automated message.
+"""
+            send_email_with_attachment(recipient_email, email_subject, email_body, output_filepath)
 
         except Exception as e:
             app.logger.error("Exception in processing: %s", e, exc_info=True)
@@ -189,7 +250,7 @@ def upload_file():
         try:
             extra_args = {
                 'Metadata': {
-                    'recipient-email': email  
+                    'recipient-email': email
                 }
             }
 
@@ -208,7 +269,7 @@ def upload_file():
             if df.empty:
                 return Response("The uploaded file is empty.", status=400)
 
-            return Response(process_dataframe_stream(df, filename), mimetype='text/event-stream')
+            return Response(process_dataframe_stream(df, filename, email), mimetype='text/event-stream')
 
         except Exception as e:
             return Response(f"Failed to read or process file: {e}", status=500)
