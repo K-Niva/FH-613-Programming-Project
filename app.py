@@ -33,10 +33,10 @@ S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
 S3_SOURCE_PREFIX = "source/"
 s3_client = boto3.client("s3")
 
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
-SMTP_SENDER_EMAIL = os.getenv("kandn203@gmail.com")
-SMTP_SENDER_PASSWORD = os.getenv("Apple1172!")
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 465
+SMTP_SENDER_EMAIL = "kandn203@gmail.com"
+SMTP_SENDER_PASSWORD = "your_gmail_app_password"
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
