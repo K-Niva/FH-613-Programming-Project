@@ -2,153 +2,67 @@ import os
 import time
 import json
 import datetime as dt
-import logging
-import smtplib
-import ssl
-from flask import Flask, render_template, request, send_from_directory, Response
+from flask import Flask, render_template, request, Response
 from werkzeug.utils import secure_filename
-from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 
 import httpx
 import pandas as pd
 import boto3
-from botocore.exceptions import ClientError
 
-# --- Configuration ---
 UPLOAD_FOLDER = 'uploads'
 DOWNLOAD_FOLDER = 'downloads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
+USER_AGENT = "Mozilla/5.0"
+DEFAULT_TIMEOUT = 10
+REQUEST_DELAY = 0.2
+DEFAULT_ALLOWED_DOMAIN = "example.com"  # change if you want
 
-DEFAULT_ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "rmit.edu.au")
-DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
-REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "0.10"))
-USER_AGENT = os.getenv("USER_AGENT", "URLStatusChecker/1.0 (FlaskWebApp)")
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
-S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "rmit-url-scan-data")
-S3_SOURCE_PREFIX = "source/"
+# AWS config (Lambda will listen on S3 bucket events)
+S3_BUCKET = os.getenv("S3_BUCKET")
 s3_client = boto3.client("s3")
-
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_SENDER_EMAIL = os.getenv("SMTP_SENDER_EMAIL")
-SMTP_SENDER_PASSWORD = os.getenv("SMTP_SENDER_PASSWORD")
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
-app.secret_key = 'supersecretkey'
-
-if __name__ != '__main__':
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+
+
+def _now_melbourne_iso():
+    return dt.datetime.now(MELBOURNE_TZ).isoformat(timespec="seconds")
+
+
+def _normalize_url(raw_url: str) -> str:
+    if not raw_url.strip():
+        return ""
+    if not raw_url.startswith(("http://", "https://")):
+        return "http://" + raw_url.strip()
+    return raw_url.strip()
+
+
+def _head_then_get_status(client, url, timeout):
+    try:
+        r = client.head(url, timeout=timeout, follow_redirects=True)
+        return r.status_code, str(r.url), None, r.elapsed.total_seconds() * 1000, r.is_redirect
+    except Exception as e:
+        return None, url, str(e), 0, False
+
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def _is_allowed_host(url: str, allowed_root: str) -> bool:
-    try:
-        host = urlparse(url.strip()).hostname or ""
-    except Exception:
-        return False
-    allowed_root = allowed_root.lower().strip()
-    host = host.lower()
-    return host == allowed_root or host.endswith("." + allowed_root)
 
-def _normalize_url(url: str) -> str:
-    url = (url or "").strip()
-    if not url:
-        return url
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        return "https://" + url
-    return url
-
-def _head_then_get_status(client: httpx.Client, url: str, timeout: float):
-    start = time.perf_counter()
-    redirected = False
-    try:
-        r = client.head(url, timeout=timeout, follow_redirects=True)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        redirected = (str(r.url) != url) or (len(r.history) > 0)
-        return r.status_code, str(r.url), "", elapsed_ms, redirected
-    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError, httpx.NetworkError, httpx.ProtocolError):
-        try:
-            start2 = time.perf_counter()
-            r = client.get(url, timeout=timeout, follow_redirects=True)
-            elapsed_ms = (time.perf_counter() - start2) * 1000.0
-            redirected = (str(r.url) != url) or (len(r.history) > 0)
-            return r.status_code, str(r.url), "", elapsed_ms, redirected
-        except Exception as e2:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            return None, url, f"RequestError: {e2.__class__.__name__}", elapsed_ms, redirected
-    except Exception as e:
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        return None, url, f"Error: {e.__class__.__name__}", elapsed_ms, redirected
-
-def _detect_url_column(df: pd.DataFrame) -> str:
-    for name in df.columns:
-        if str(name).strip().lower() in {"url", "urls", "link"}:
-            return name
-    for name in df.columns:
-        if "url" in str(name).lower():
-            return name
-    return df.columns[0] if len(df.columns) > 0 else None
-
-def _now_melbourne_iso() -> str:
-    return dt.datetime.now(MELBOURNE_TZ).replace(microsecond=0).isoformat()
-
-
-def send_email_with_attachment(recipient_email, subject, body_text, file_path):
-    """
-    Sends an email with an attachment using smtplib.
-    """
-    if not all([SMTP_SERVER, SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD]):
-        app.logger.error("SMTP settings are not fully configured. Cannot send email.")
-        return
-
-    msg = MIMEMultipart()
-    msg['Subject'] = subject
-    msg['From'] = SMTP_SENDER_EMAIL
-    msg['To'] = recipient_email
-
-    msg.attach(MIMEText(body_text, 'plain'))
-
-
-    try:
-        with open(file_path, 'rb') as f:
-            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
-        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
-        msg.attach(part)
-    except FileNotFoundError:
-        app.logger.error(f"Attachment file not found at path: {file_path}")
-        return
-
-    try:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
-            server.login(SMTP_SENDER_EMAIL, SMTP_SENDER_PASSWORD)
-            server.send_message(msg)
-            app.logger.info(f"Email sent successfully to {recipient_email}")
-    except Exception as e:
-        app.logger.error(f"Failed to send email to {recipient_email}: {e}")
-
-
-def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient_email: str):
+def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
     def generate():
         try:
-            app.logger.info("Starting stream generation for file: %s", original_filename)
-            url_col = _detect_url_column(df)
+            app.logger.info("Processing file: %s", original_filename)
+
+            url_col = next((c for c in df.columns if c.lower() in ["url", "link"]), None)
             if not url_col:
-                raise ValueError("Could not detect a URL column. Please name it 'URL', 'Link', or similar.")
+                raise ValueError("Could not detect a URL column. Please name it 'URL' or 'Link'.")
 
             total_urls = len(df)
             skipped_count = 0
@@ -163,17 +77,14 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
             df["error"] = ""
 
             headers = {"User-Agent": USER_AGENT}
-
             with httpx.Client(headers=headers) as client:
                 for idx, row in df.iterrows():
                     raw_url = str(row[url_col] or "")
                     url = _normalize_url(raw_url)
 
-                    app.logger.info(f"Processing URL #{idx + 1}/{total_urls}: {url}")
-
-                    if not url or not _is_allowed_host(url, DEFAULT_ALLOWED_DOMAIN):
+                    if not url or DEFAULT_ALLOWED_DOMAIN not in url:
                         df.at[idx, "checking_time"] = _now_melbourne_iso()
-                        df.at[idx, "error"] = f"Skipped: not a valid {DEFAULT_ALLOWED_DOMAIN} URL"
+                        df.at[idx, "error"] = "Skipped: not valid URL"
                         skipped_count += 1
                     else:
                         status_code, final_url, err, elapsed_ms, redirected = _head_then_get_status(client, url, timeout=DEFAULT_TIMEOUT)
@@ -187,32 +98,23 @@ def process_dataframe_stream(df: pd.DataFrame, original_filename: str, recipient
 
                     yield f'data: {json.dumps({"checked": idx + 1})}\n\n'
 
+            # Save processed file
             base, ext = os.path.splitext(original_filename)
             output_filename = f"{base}_processed_{dt.datetime.now(MELBOURNE_TZ).strftime('%Y%m%d_%H%M%S')}{ext}"
-            output_filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], output_filename)
+            output_filepath = os.path.join(DOWNLOAD_FOLDER, output_filename)
 
             if original_filename.endswith('.xlsx'):
                 df.to_excel(output_filepath, index=False, engine="openpyxl")
             else:
                 df.to_csv(output_filepath, index=False)
 
+            # ✅ Upload to S3 so Lambda can email
+            s3_client.upload_file(output_filepath, S3_BUCKET, output_filename)
+
             yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
 
-            email_subject = f"URL Scan Report for {original_filename}"
-            email_body = f"""
-Hello,
-
-Please find the attached report for the URL scan of the file '{original_filename}'.
-
-Total URLs processed: {total_urls}
-URLs skipped: {skipped_count}
-
-This is an automated message.
-"""
-            send_email_with_attachment(recipient_email, email_subject, email_body, output_filepath)
-
         except Exception as e:
-            app.logger.error("Exception in processing: %s", e, exc_info=True)
+            app.logger.error("Exception: %s", e, exc_info=True)
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
     return generate()
@@ -226,32 +128,18 @@ def index():
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files or 'email' not in request.form:
-        return Response("Form is incomplete. File and email are required.", status=400)
+        return Response("Form incomplete: file and email required.", status=400)
 
     file = request.files['file']
     email = request.form['email']
 
     if file.filename == '' or email.strip() == '':
-        return Response("No file selected or email provided.", status=400)
+        return Response("No file selected or email missing.", status=400)
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
-
-        s3_key = f"{S3_SOURCE_PREFIX}{filename}"
-        try:
-            extra_args = {
-                'Metadata': {
-                    'recipient-email': email
-                }
-            }
-
-            s3_client.upload_file(filepath, S3_BUCKET_NAME, s3_key, ExtraArgs=extra_args)
-            app.logger.info(f"Uploaded {s3_key} to S3 with recipient {email}")
-        except ClientError as e:
-            app.logger.error("S3 upload failed: %s", e, exc_info=True)
-            return Response(f"S3 upload failed: {e}", status=500)
 
         try:
             if filename.endswith('.xlsx'):
@@ -262,18 +150,13 @@ def upload_file():
             if df.empty:
                 return Response("The uploaded file is empty.", status=400)
 
-            return Response(process_dataframe_stream(df, filename, email), mimetype='text/event-stream')
+            return Response(process_dataframe_stream(df, filename), mimetype='text/event-stream')
 
         except Exception as e:
-            return Response(f"Failed to read or process file: {e}", status=500)
+            return Response(f"Error: {e}", status=500)
     else:
         return Response(f"Allowed file types are: {', '.join(ALLOWED_EXTENSIONS)}", status=400)
 
 
-@app.route('/download/<filename>')
-def download_file(filename):
-    return send_from_directory(app.config['DOWNLOAD_FOLDER'], filename, as_attachment=True)
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
