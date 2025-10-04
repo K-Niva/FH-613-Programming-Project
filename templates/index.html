@@ -5,134 +5,152 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>URL Status Checker</title>
     <style>
-        body { font-family: sans-serif; margin: 2em; text-align: center; }
+        body { font-family: sans-serif; margin: 2em; }
         .container {
             width: 80%;
             max-width: 600px;
             margin: 20px auto;
-            padding: 20px;
             border: 1px solid #ccc;
+            padding: 20px;
             background-color: #f9f9f9;
-            text-align: left;
         }
-        h1 { text-align: center; }
-        p { line-height: 1.6; }
-        input[type="submit"], button {
+        h1, h3 { text-align: center; }
+        #progress-container { text-align: center; }
+        #download-area { text-align: center; background-color: #f0f9f2; }
+        #download-area a, #download-area button {
             display: inline-block;
-            margin-top: 10px;
+            margin: 10px;
             padding: 10px 15px;
+            text-decoration: none;
             font-size: 1.1em;
             cursor: pointer;
             border-radius: 5px;
-            color: white;
-            border: none;
         }
-        input[type="submit"] { background-color: #007bff; }
-        #reset-button { background-color: #28a745; }
-        
-        /* Message area for success or error feedback */
-        #message-area {
-            padding: 20px;
-            border-radius: 5px;
-            margin-top: 15px;
-        }
-        .success {
-            color: #155724;
-            background-color: #d4edda;
-            border: 1px solid #c3e6cb;
-        }
-        .error {
-            color: #721c24;
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-        }
+        #download-link { background-color: #28a745; color: white; }
+        #reset-button { background-color: #007bff; color: white; border: none; }
+        .message-log { font-size: 0.9em; color: #666; margin-top: 15px; }
     </style>
 </head>
 <body>
-    
-    <div id="upload-container" class="container">
+    <div class="container" id="form-container">
         <h1>RMIT Marketing Ad URL Uploader</h1>
-        <p>Upload your file to begin processing. The first column of your file should contain the URLs to be checked.</p>
-        <p><strong>Note:</strong> A confirmation email with the processed file will be sent to the address you provide once the scan is complete.</p>
+        <p>The first column of your file should contain the URLs to be checked.</p>
+        <p><strong>Note:</strong> Your processed file will be emailed to you. You can also download it here once the scan is complete.</p>
         
         <form id="upload-form" enctype="multipart/form-data">
-            <label for="email"><b>Recipient Email:</b></label><br>
-            <input type="email" id="email" name="email" required style="width: 95%; padding: 8px;">
+            <label for="email">Recipient Email:</label>
+            <input type="email" id="email" name="email" required>
             <br><br>
 
-            <label for="file"><b>File to Process (.xlsx or .csv):</b></label><br>
+            <label for="file">File to Process:</label>
             <input type="file" id="file" name="file" accept=".xlsx,.csv" required>
-            <br>
+            <br><br>
 
-            <input type="submit" value="Upload and Process File">
+            <input type="submit" value="Upload and Process">
         </form>
+    </div>
 
-        <!-- This div will be used to show the status after upload -->
-        <div id="status-container" style="display: none;">
-            <h3 id="status-heading"></h3>
-            <div id="message-area"></div>
-            <button id="reset-button">Upload Another File</button>
-        </div>
+    <div id="progress-container" class="container" style="display: none;">
+        <h3 id="progress-status">Starting...</h3>
+        <div id="message-log" class="message-log"></div>
+    </div>
+
+    <div id="download-area" class="container" style="display: none;">
+        <h3>Processing complete!</h3>
+        <a id="download-link">Download the updated file</a>
+        <button id="reset-button">Process Another File</button>
     </div>
 
     <script>
-        document.getElementById('upload-form').addEventListener('submit', async function(event) {
-            event.preventDefault();
+    document.getElementById('upload-form').addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const form = event.target;
+        const formData = new FormData(form);
 
-            const form = event.target;
-            const submitButton = form.querySelector('input[type="submit"]');
-            const formData = new FormData(form);
+        // --- UI Element References ---
+        const formContainer = document.getElementById('form-container');
+        const progressContainer = document.getElementById('progress-container');
+        const downloadArea = document.getElementById('download-area');
+        const progressStatus = document.getElementById('progress-status');
+        const messageLog = document.getElementById('message-log');
+        const downloadLink = document.getElementById('download-link');
 
-            const uploadContainer = document.getElementById('upload-container');
-            const statusContainer = document.getElementById('status-container');
-            const statusHeading = document.getElementById('status-heading');
-            const messageArea = document.getElementById('message-area');
+        let pollingInterval; // To hold our setInterval ID
 
-            // Disable button and show loading state
-            submitButton.disabled = true;
-            submitButton.value = 'Uploading...';
-            
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
+        // --- Reset and Show Progress UI ---
+        formContainer.style.display = 'none';
+        progressContainer.style.display = 'block';
+        downloadArea.style.display = 'none';
+        progressStatus.textContent = 'Uploading file...';
+        messageLog.innerHTML = '';
 
-                const result = await response.json();
+        try {
+            // 1. Upload the file and get the Job ID
+            const uploadResponse = await fetch('/upload', { method: 'POST', body: formData });
+            const uploadResult = await uploadResponse.json();
 
-                if (!response.ok) {
-                    // If the server returns an error, use its message
-                    throw new Error(result.message || 'An unknown server error occurred.');
-                }
-                
-                // --- Handle Success ---
-                form.style.display = 'none'; // Hide the form
-                statusContainer.style.display = 'block'; // Show the status area
-                
-                statusHeading.textContent = 'Upload Successful!';
-                messageArea.className = 'success';
-                messageArea.innerHTML = `<p>${result.message}</p>`;
-
-            } catch (error) {
-                // --- Handle Error ---
-                form.style.display = 'none'; // Hide the form
-                statusContainer.style.display = 'block'; // Show the status area
-
-                statusHeading.textContent = 'Upload Failed!';
-                messageArea.className = 'error';
-                messageArea.innerHTML = `<p><strong>Error:</strong> ${error.message}</p><p>Please check your file or the email address and try again.</p>`;
-            
-            } finally {
-                // Re-enable the button in case the user wants to try again after an error
-                // This part is less relevant if we just reload the page on "reset"
-                submitButton.disabled = false;
-                submitButton.value = 'Upload and Process File';
+            if (!uploadResult.success) {
+                throw new Error(uploadResult.message || 'The server rejected the file upload.');
             }
-        });
 
-        document.getElementById('reset-button').addEventListener('click', function() {
-            location.reload(); // The simplest way to reset the form
-        });
+            progressStatus.textContent = 'File accepted. Waiting for processing to start...';
+            const jobId = uploadResult.job_id;
+
+            // 2. Start polling for status updates
+            pollingInterval = setInterval(async () => {
+                try {
+                    const statusResponse = await fetch(`/status/${jobId}`);
+                    const data = await statusResponse.json();
+                    const jobStatus = data.job_status || 'PENDING';
+                    
+                    if (data.total_urls && !messageLog.textContent) {
+                         messageLog.textContent = `Found ${data.total_urls} rows to process in ${data.original_filename || 'your file'}.`;
+                    }
+
+                    if (jobStatus === 'PROCESSING') {
+                        const total = data.total_urls || 0;
+                        const processed = data.processed_urls || 0;
+                        progressStatus.textContent = `${processed} / ${total} has been processed`;
+                    }
+
+                    if (jobStatus === 'COMPLETE') {
+                        clearInterval(pollingInterval);
+                        progressStatus.textContent = `All ${data.total_urls || 0} rows have been processed!`;
+                        
+                        downloadLink.href = `/download/${data.result_filename}`;
+                        
+                        progressContainer.style.display = 'none';
+                        downloadArea.style.display = 'block';
+                    }
+
+                    if (jobStatus === 'ERROR') {
+                        clearInterval(pollingInterval);
+                        const errorMessage = data.error_message || 'An unknown error occurred during processing.';
+                        throw new Error(errorMessage);
+                    }
+
+                } catch (pollError) {
+                    clearInterval(pollingInterval);
+                    // Re-throw to be caught by the main catch block
+                    throw pollError;
+                }
+            }, 2500); // Poll every 2.5 seconds
+
+        } catch (error) {
+            if (pollingInterval) clearInterval(pollingInterval);
+            
+            progressStatus.textContent = 'An Error Occurred!';
+            messageLog.innerHTML = `<span style="color: red;"><strong>Error:</strong> ${error.message}</span>`;
+            
+            // Show the download area but hide the download link, showing only the reset button
+            progressContainer.style.display = 'none';
+            downloadArea.style.display = 'block';
+            downloadArea.querySelector('h3').textContent = 'Failed!';
+            downloadLink.style.display = 'none';
+        }
+    });
+
+    document.getElementById('reset-button').addEventListener('click', () => location.reload());
     </script>
 </body>
 </html>
