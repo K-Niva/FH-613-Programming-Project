@@ -1,162 +1,119 @@
 import os
-import time
-import json
-import datetime as dt
-from flask import Flask, render_template, request, Response
+import logging
+from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
-from zoneinfo import ZoneInfo
-
-import httpx
-import pandas as pd
 import boto3
+from botocore.exceptions import ClientError
 
+# --- Configuration ---
+# A temporary folder to store the file before it's uploaded to S3
 UPLOAD_FOLDER = 'uploads'
-DOWNLOAD_FOLDER = 'downloads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
-USER_AGENT = "Mozilla/5.0"
-DEFAULT_TIMEOUT = 10
-REQUEST_DELAY = 0.2
-DEFAULT_ALLOWED_DOMAIN = "example.com"  # change if you want
 
-MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+# IMPORTANT: Make sure this environment variable is set in your deployment environment
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "your-s3-bucket-name-here") 
+S3_SOURCE_PREFIX = "source/"
 
-# AWS config (Lambda will listen on S3 bucket events)
-S3_BUCKET = os.getenv("S3_BUCKET")
+# Initialize boto3 S3 client
 s3_client = boto3.client("s3")
 
+# --- Flask App Initialization ---
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['DOWNLOAD_FOLDER'] = DOWNLOAD_FOLDER
+app.secret_key = 'your-very-secret-key' # Change this in a real application
+
+# Configure logging for production environments like Gunicorn
+if __name__ != '__main__':
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+
+# Ensure the temporary upload directory exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-
-def _now_melbourne_iso():
-    return dt.datetime.now(MELBOURNE_TZ).isoformat(timespec="seconds")
-
-
-def _normalize_url(raw_url: str) -> str:
-    if not raw_url.strip():
-        return ""
-    if not raw_url.startswith(("http://", "https://")):
-        return "http://" + raw_url.strip()
-    return raw_url.strip()
-
-
-def _head_then_get_status(client, url, timeout):
-    try:
-        r = client.head(url, timeout=timeout, follow_redirects=True)
-        return r.status_code, str(r.url), None, r.elapsed.total_seconds() * 1000, r.is_redirect
-    except Exception as e:
-        return None, url, str(e), 0, False
-
 
 def allowed_file(filename):
+    """Checks if the uploaded file has an allowed extension."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def process_dataframe_stream(df: pd.DataFrame, original_filename: str):
-    def generate():
-        try:
-            app.logger.info("Processing file: %s", original_filename)
-
-            url_col = next((c for c in df.columns if c.lower() in ["url", "link"]), None)
-            if not url_col:
-                raise ValueError("Could not detect a URL column. Please name it 'URL' or 'Link'.")
-
-            total_urls = len(df)
-            skipped_count = 0
-            yield f'data: {json.dumps({"message": f"Found {total_urls} rows in {original_filename}"})}\n\n'
-            yield f'data: {json.dumps({"total": total_urls})}\n\n'
-
-            df["checking_time"] = ""
-            df["status_code"] = ""
-            df["final_url"] = ""
-            df["redirected"] = ""
-            df["elapsed_ms"] = ""
-            df["error"] = ""
-
-            headers = {"User-Agent": USER_AGENT}
-            with httpx.Client(headers=headers) as client:
-                for idx, row in df.iterrows():
-                    raw_url = str(row[url_col] or "")
-                    url = _normalize_url(raw_url)
-
-                    if not url or DEFAULT_ALLOWED_DOMAIN not in url:
-                        df.at[idx, "checking_time"] = _now_melbourne_iso()
-                        df.at[idx, "error"] = "Skipped: not valid URL"
-                        skipped_count += 1
-                    else:
-                        status_code, final_url, err, elapsed_ms, redirected = _head_then_get_status(client, url, timeout=DEFAULT_TIMEOUT)
-                        df.at[idx, "checking_time"] = _now_melbourne_iso()
-                        df.at[idx, "status_code"] = status_code if status_code else "N/A"
-                        df.at[idx, "final_url"] = final_url
-                        df.at[idx, "redirected"] = bool(redirected)
-                        df.at[idx, "elapsed_ms"] = round(float(elapsed_ms), 2)
-                        df.at[idx, "error"] = err
-                        time.sleep(REQUEST_DELAY)
-
-                    yield f'data: {json.dumps({"checked": idx + 1})}\n\n'
-
-            # Save processed file
-            base, ext = os.path.splitext(original_filename)
-            output_filename = f"{base}_processed_{dt.datetime.now(MELBOURNE_TZ).strftime('%Y%m%d_%H%M%S')}{ext}"
-            output_filepath = os.path.join(DOWNLOAD_FOLDER, output_filename)
-
-            if original_filename.endswith('.xlsx'):
-                df.to_excel(output_filepath, index=False, engine="openpyxl")
-            else:
-                df.to_csv(output_filepath, index=False)
-
-            # ✅ Upload to S3 so Lambda can email
-            s3_client.upload_file(output_filepath, S3_BUCKET, output_filename)
-
-            yield f'data: {json.dumps({"done": True, "filename": output_filename, "skipped": skipped_count})}\n\n'
-
-        except Exception as e:
-            app.logger.error("Exception: %s", e, exc_info=True)
-            yield f'data: {json.dumps({"error": str(e)})}\n\n'
-
-    return generate()
-
 
 @app.route('/')
 def index():
+    """Renders the main upload page."""
     return render_template('index.html')
-
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+    """
+    Handles the file upload from the user.
+    1. Validates the request.
+    2. Saves the file temporarily.
+    3. Uploads the file to S3 with the recipient's email in the metadata.
+    4. Returns a JSON response to the front-end.
+    """
     if 'file' not in request.files or 'email' not in request.form:
-        return Response("Form incomplete: file and email required.", status=400)
+        app.logger.warning("Upload attempt with incomplete form.")
+        return jsonify({
+            'success': False,
+            'message': 'Form is incomplete. File and email are required.'
+        }), 400
 
     file = request.files['file']
-    email = request.form['email']
+    email = request.form.get('email', '').strip()
 
-    if file.filename == '' or email.strip() == '':
-        return Response("No file selected or email missing.", status=400)
+    if not file.filename or not email:
+        return jsonify({
+            'success': False,
+            'message': 'No file selected or email provided. Please fill out both fields.'
+        }), 400
 
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
+    if not allowed_file(file.filename):
+        return jsonify({
+            'success': False,
+            'message': f"Invalid file type. Allowed file types are: {', '.join(ALLOWED_EXTENSIONS)}"
+        }), 400
 
-        try:
-            if filename.endswith('.xlsx'):
-                df = pd.read_excel(filepath, engine="openpyxl")
-            else:
-                df = pd.read_csv(filepath)
+    filename = secure_filename(file.filename)
+    local_filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
-            if df.empty:
-                return Response("The uploaded file is empty.", status=400)
+    try:
+        # Save the file to a temporary location on the server
+        file.save(local_filepath)
 
-            return Response(process_dataframe_stream(df, filename), mimetype='text/event-stream')
+        # Prepare the key for the S3 object
+        s3_key = f"{S3_SOURCE_PREFIX}{filename}"
 
-        except Exception as e:
-            return Response(f"Error: {e}", status=500)
-    else:
-        return Response(f"Allowed file types are: {', '.join(ALLOWED_EXTENSIONS)}", status=400)
+        # Prepare the metadata to be attached to the S3 object
+        extra_args = {
+            'Metadata': {
+                'recipient-email': email
+            }
+        }
 
+        # Upload the file to S3, including the metadata
+        s3_client.upload_file(local_filepath, S3_BUCKET_NAME, s3_key, ExtraArgs=extra_args)
+        app.logger.info(f"Successfully uploaded {s3_key} to S3 for recipient {email}")
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+        # Return a JSON success message to the front-end
+        return jsonify({
+            'success': True,
+            'message': f'Your file has been received and is now being processed. A report will be sent to <strong>{email}</strong> shortly.'
+        }), 200
+
+    except ClientError as e:
+        app.logger.error("S3 upload failed: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': 'Server error: Could not upload file to storage. Please try again later.'
+        }), 500
+    except Exception as e:
+        app.logger.error("An unexpected error occurred during upload: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': 'An unexpected server error occurred. Please check the file format and try again.'
+        }), 500
+    finally:
+        # IMPORTANT: Clean up the temporary file from the server's disk
+        if os.path.exists(local_filepath):
+            os.remove(local_filepath)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5001)
