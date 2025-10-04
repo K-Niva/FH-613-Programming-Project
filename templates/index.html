@@ -15,6 +15,7 @@
             background-color: #f9f9f9;
         }
         h1, h3 { text-align: center; }
+        .note { font-size: 0.9em; color: #555; }
         #progress-container { text-align: center; }
         #download-area { text-align: center; background-color: #f0f9f2; }
         #download-area a, #download-area button {
@@ -29,20 +30,30 @@
         #download-link { background-color: #28a745; color: white; }
         #reset-button { background-color: #007bff; color: white; border: none; }
         .message-log { font-size: 0.9em; color: #666; margin-top: 15px; }
+        #skipped-message {
+            color: #856404;
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 15px;
+        }
     </style>
 </head>
 <body>
     <div class="container" id="form-container">
         <h1>RMIT Marketing Ad URL Uploader</h1>
         <p>The first column of your file should contain the URLs to be checked.</p>
-        <p><strong>Note:</strong> Your processed file will be emailed to you. You can also download it here once the scan is complete.</p>
+        
+        <!-- ✅ NEW NOTE ABOUT DOMAIN RULE -->
+        <p class="note"><strong>Important:</strong> Only URLs from the <code>rmit.edu.au</code> domain will be processed. All other URLs will be skipped.</p>
         
         <form id="upload-form" enctype="multipart/form-data">
             <label for="email">Recipient Email:</label>
-            <input type="email" id="email" name="email" required>
+            <input type="email" id="email" name="email" required style="width: 95%; padding: 8px;">
             <br><br>
 
-            <label for="file">File to Process:</label>
+            <label for="file">File to Process (.xlsx or .csv):</label>
             <input type="file" id="file" name="file" accept=".xlsx,.csv" required>
             <br><br>
 
@@ -57,8 +68,14 @@
 
     <div id="download-area" class="container" style="display: none;">
         <h3>Processing complete!</h3>
+        <p id="skipped-message" style="display: none;"></p>
         <a id="download-link">Download the updated file</a>
         <button id="reset-button">Process Another File</button>
+
+        <!-- ✅ NEW NOTE ABOUT SCHEDULING AND EMAIL -->
+        <p class="note" style="margin-top: 20px;">
+            A copy of the processed file has been sent to your email. This file is now scheduled to be checked automatically every day at 3 AM.
+        </p>
     </div>
 
     <script>
@@ -74,8 +91,9 @@
         const progressStatus = document.getElementById('progress-status');
         const messageLog = document.getElementById('message-log');
         const downloadLink = document.getElementById('download-link');
+        const skippedMessage = document.getElementById('skipped-message');
 
-        let pollingInterval; // To hold our setInterval ID
+        let pollingInterval;
 
         // --- Reset and Show Progress UI ---
         formContainer.style.display = 'none';
@@ -83,6 +101,7 @@
         downloadArea.style.display = 'none';
         progressStatus.textContent = 'Uploading file...';
         messageLog.innerHTML = '';
+        skippedMessage.style.display = 'none';
 
         try {
             // 1. Upload the file and get the Job ID
@@ -117,6 +136,17 @@
                         clearInterval(pollingInterval);
                         progressStatus.textContent = `All ${data.total_urls || 0} rows have been processed!`;
                         
+                        // Handle the skipped message
+                        if (data.skipped_urls && data.skipped_urls > 0) {
+                            const totalUrls = data.total_urls || 0;
+                            if (data.skipped_urls === totalUrls) {
+                                skippedMessage.textContent = `All ${totalUrls} URLs were skipped as they were not from the rmit.edu.au domain.`;
+                            } else {
+                                skippedMessage.textContent = `${data.skipped_urls} of ${totalUrls} URLs were skipped as they were not from the rmit.edu.au domain.`;
+                            }
+                            skippedMessage.style.display = 'block';
+                        }
+                        
                         downloadLink.href = `/download/${data.result_filename}`;
                         
                         progressContainer.style.display = 'none';
@@ -131,22 +161,19 @@
 
                 } catch (pollError) {
                     clearInterval(pollingInterval);
-                    // Re-throw to be caught by the main catch block
                     throw pollError;
                 }
-            }, 2500); // Poll every 2.5 seconds
+            }, 2500);
 
         } catch (error) {
             if (pollingInterval) clearInterval(pollingInterval);
             
-            progressStatus.textContent = 'An Error Occurred!';
-            messageLog.innerHTML = `<span style="color: red;"><strong>Error:</strong> ${error.message}</span>`;
-            
-            // Show the download area but hide the download link, showing only the reset button
             progressContainer.style.display = 'none';
             downloadArea.style.display = 'block';
             downloadArea.querySelector('h3').textContent = 'Failed!';
             downloadLink.style.display = 'none';
+            messageLog.innerHTML = `<p style="color: red;"><strong>Error:</strong> ${error.message}</p>`;
+            downloadArea.prepend(messageLog);
         }
     });
 

@@ -1,5 +1,3 @@
-# app.py (with /download route)
-
 import os
 import logging
 import uuid
@@ -14,19 +12,21 @@ UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME") 
 S3_SOURCE_PREFIX = "source/"
-S3_PROCESSED_PREFIX = "processed/" # We need this for the download route
+S3_PROCESSED_PREFIX = "processed/"
 
 # --- AWS Clients ---
-AWS_REGION = "ap-southeast-2"
-s3_client = boto3.client("s3")
-dynamodb = boto3.resource('dynamodb')
+# IMPORTANT: Hardcode the region to ensure it works correctly
+AWS_REGION = "ap-southeast-2"  # <-- Make sure this is your AWS Region!
+
+s3_client = boto3.client("s3", region_name=AWS_REGION)
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 progress_table = dynamodb.Table('url-processing-jobs')
+
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ... (logging config if needed) ...
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -75,7 +75,6 @@ def upload_file():
 
     except Exception as e:
         app.logger.error(f"Error during upload for job {job_id}: {e}", exc_info=True)
-        # Best-effort error update
         try:
             progress_table.update_item(
                 Key={'job_id': job_id},
@@ -100,12 +99,8 @@ def get_status(job_id):
         app.logger.error(f"Could not fetch status for job {job_id}: {e}")
         return jsonify({'status': 'ERROR', 'error_message': 'Could not fetch status.'}), 500
 
-# --- NEW DOWNLOAD ROUTE ---
 @app.route('/download/<filename>')
 def download_file(filename):
-    """
-    Streams a processed file from S3 to the user's browser.
-    """
     s3_key = f"{S3_PROCESSED_PREFIX}{secure_filename(filename)}"
     try:
         s3_object = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
