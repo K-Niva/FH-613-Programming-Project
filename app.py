@@ -17,6 +17,7 @@ S3_SOURCE_PREFIX = "source/"
 S3_PROCESSED_PREFIX = "processed/" # We need this for the download route
 
 # --- AWS Clients ---
+AWS_REGION = "ap-southeast-2"
 s3_client = boto3.client("s3")
 dynamodb = boto3.resource('dynamodb')
 progress_table = dynamodb.Table('url-processing-jobs')
