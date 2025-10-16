@@ -6,6 +6,8 @@ from flask import Flask, render_template, request, jsonify, Response
 from werkzeug.utils import secure_filename
 from botocore.exceptions import ClientError
 import datetime as dt
+from datetime import datetime
+import pytz  # ✅ Added for timezone handling
 
 # --- Configuration ---
 UPLOAD_FOLDER = 'uploads'
@@ -37,7 +39,7 @@ def index():
     return render_template('index.html')
 
 
-# --- REPLACED /upload FUNCTION BELOW ---
+# --- UPDATED /upload FUNCTION BELOW ---
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload, creating an immediate job AND a recurring schedule if requested."""
@@ -50,14 +52,14 @@ def upload_file():
     is_scheduled = request.form.get('enable-schedule')
     start_date = request.form.get('schedule_start_date')
     end_date = request.form.get('schedule_end_date')
-    process_time = request.form.get('schedule_process_time')
+    process_time = request.form.get('schedule_process_time')  # User provides time in AEST
 
     if not file.filename or not email or not allowed_file(file.filename):
         return jsonify({'success': False, 'message': 'Invalid file or email provided.'}), 400
 
     filename = secure_filename(file.filename)
     local_filepath = os.path.join(UPLOAD_FOLDER, filename)
-    
+
     try:
         file.save(local_filepath)
         s3_key = f"{S3_SOURCE_PREFIX}{filename}"
@@ -66,6 +68,21 @@ def upload_file():
         job_id_for_polling = None  # ID for frontend polling
 
         if is_scheduled and start_date and end_date and process_time:
+            # --- START: AEST to UTC conversion ---
+            try:
+                aest_tz = pytz.timezone('Australia/Sydney')  # Handles AEST/AEDT
+                naive_datetime_str = f"{start_date} {process_time}"
+                naive_dt = datetime.strptime(naive_datetime_str, '%Y-%m-%d %H:%M')
+                aest_dt = aest_tz.localize(naive_dt, is_dst=None)
+                utc_dt = aest_dt.astimezone(pytz.utc)
+                utc_process_time_str = utc_dt.strftime('%H:%M')
+
+                print(f"DEBUG: Converted {process_time} AEST on {start_date} → {utc_process_time_str} UTC.")
+            except Exception as e:
+                print(f"WARNING: Timezone conversion failed, using input time. Error: {e}")
+                utc_process_time_str = process_time
+            # --- END: AEST to UTC conversion ---
+
             # --- Create schedule template ---
             schedule_id = str(uuid.uuid4())
             schedule_item = {
@@ -77,11 +94,11 @@ def upload_file():
                 's3_key': s3_key,
                 'schedule_start_date': start_date,
                 'schedule_end_date': end_date,
-                'schedule_process_time': process_time,
+                'schedule_process_time': utc_process_time_str,  # ✅ Store UTC version
                 'upload_time': dt.datetime.utcnow().isoformat()
             }
             progress_table.put_item(Item=schedule_item)
-            
+
             # --- Create immediate job run ---
             initial_run_id = str(uuid.uuid4())
             run_item = {
@@ -103,10 +120,13 @@ def upload_file():
                 Metadata={'recipient-email': email, 'job-id': initial_run_id},
                 MetadataDirective='REPLACE'
             )
-            
+
             job_id_for_polling = initial_run_id
-            message = f"File accepted. Processing now and scheduled to run daily from {start_date} to {end_date}."
-        
+            message = (
+                f"File accepted. Processing now and scheduled daily from {start_date} to {end_date} "
+                f"at {process_time} AEST ({utc_process_time_str} UTC)."
+            )
+
         else:
             # --- Standard one-time on-demand job ---
             on_demand_job_id = str(uuid.uuid4())
@@ -142,7 +162,7 @@ def upload_file():
     finally:
         if os.path.exists(local_filepath):
             os.remove(local_filepath)
-# --- END REPLACED FUNCTION ---
+# --- END UPDATED FUNCTION ---
 
 
 @app.route('/status/<job_id>')
