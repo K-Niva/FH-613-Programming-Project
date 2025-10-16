@@ -15,8 +15,7 @@ S3_SOURCE_PREFIX = "source/"
 S3_PROCESSED_PREFIX = "processed/"
 
 # --- AWS Clients ---
-# IMPORTANT: Hardcode the region to ensure it works correctly
-AWS_REGION = "ap-southeast-2"  # <-- Make sure this matches your AWS Region
+AWS_REGION = "ap-southeast-2"  # Ensure it matches your AWS region
 
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
@@ -38,16 +37,16 @@ def index():
     return render_template('index.html')
 
 
+# --- REPLACED /upload FUNCTION BELOW ---
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle file upload, either immediate or scheduled recurring job."""
+    """Handle file upload, creating an immediate job AND a recurring schedule if requested."""
     if 'file' not in request.files or 'email' not in request.form:
         return jsonify({'success': False, 'message': 'Form is incomplete.'}), 400
 
     file = request.files['file']
     email = request.form.get('email', '').strip()
 
-    # --- NEW: Capture schedule form data ---
     is_scheduled = request.form.get('enable-schedule')
     start_date = request.form.get('schedule_start_date')
     end_date = request.form.get('schedule_end_date')
@@ -58,21 +57,19 @@ def upload_file():
 
     filename = secure_filename(file.filename)
     local_filepath = os.path.join(UPLOAD_FOLDER, filename)
-    job_id = str(uuid.uuid4())  # This will be the ID for the schedule or the single job
-
+    
     try:
-        # Save the uploaded file locally first
         file.save(local_filepath)
         s3_key = f"{S3_SOURCE_PREFIX}{filename}"
-
-        # Upload to S3 first
         s3_client.upload_file(local_filepath, S3_BUCKET_NAME, s3_key)
 
-        # --- NEW: Logic to create either a schedule or a one-off job ---
+        job_id_for_polling = None  # ID for frontend polling
+
         if is_scheduled and start_date and end_date and process_time:
-            # This is a recurring schedule template
-            item = {
-                'job_id': job_id,
+            # --- Create schedule template ---
+            schedule_id = str(uuid.uuid4())
+            schedule_item = {
+                'job_id': schedule_id,
                 'job_type': 'SCHEDULE_TEMPLATE',
                 'job_status': 'ACTIVE',
                 'recipient_email': email,
@@ -83,12 +80,38 @@ def upload_file():
                 'schedule_process_time': process_time,
                 'upload_time': dt.datetime.utcnow().isoformat()
             }
-            progress_table.put_item(Item=item)
-            message = f"Successfully created a daily schedule (ID: {job_id}) to run from {start_date} to {end_date}."
+            progress_table.put_item(Item=schedule_item)
+            
+            # --- Create immediate job run ---
+            initial_run_id = str(uuid.uuid4())
+            run_item = {
+                'job_id': initial_run_id,
+                'job_type': 'JOB_RUN',
+                'job_status': 'PENDING',
+                'original_filename': filename,
+                'recipient_email': email,
+                'parent_schedule_id': schedule_id,
+                'upload_time': dt.datetime.utcnow().isoformat()
+            }
+            progress_table.put_item(Item=run_item)
+
+            # --- Trigger Lambda via S3 metadata update ---
+            s3_client.copy_object(
+                Bucket=S3_BUCKET_NAME,
+                Key=s3_key,
+                CopySource={'Bucket': S3_BUCKET_NAME, 'Key': s3_key},
+                Metadata={'recipient-email': email, 'job-id': initial_run_id},
+                MetadataDirective='REPLACE'
+            )
+            
+            job_id_for_polling = initial_run_id
+            message = f"File accepted. Processing now and scheduled to run daily from {start_date} to {end_date}."
+        
         else:
-            # This is an immediate, on-demand job (the original behavior)
+            # --- Standard one-time on-demand job ---
+            on_demand_job_id = str(uuid.uuid4())
             item = {
-                'job_id': job_id,
+                'job_id': on_demand_job_id,
                 'job_type': 'JOB_RUN',
                 'job_status': 'PENDING',
                 'original_filename': filename,
@@ -97,38 +120,29 @@ def upload_file():
             }
             progress_table.put_item(Item=item)
 
-            # For immediate jobs, we add metadata to the S3 object
-            # so that the S3 trigger on the Lambda function processes it.
             s3_client.copy_object(
                 Bucket=S3_BUCKET_NAME,
                 Key=s3_key,
                 CopySource={'Bucket': S3_BUCKET_NAME, 'Key': s3_key},
-                Metadata={'recipient-email': email, 'job-id': job_id},
+                Metadata={'recipient-email': email, 'job-id': on_demand_job_id},
                 MetadataDirective='REPLACE'
             )
+            job_id_for_polling = on_demand_job_id
             message = 'File upload successful. Processing has started immediately.'
 
         return jsonify({
             'success': True,
             'message': message,
-            'job_id': job_id
+            'job_id': job_id_for_polling
         }), 200
 
     except Exception as e:
-        app.logger.error(f"Error during upload for job {job_id}: {e}", exc_info=True)
-        try:
-            progress_table.update_item(
-                Key={'job_id': job_id},
-                UpdateExpression="SET job_status = :s, error_message = :e",
-                ExpressionAttributeValues={':s': 'ERROR', ':e': str(e)}
-            )
-        except Exception as db_error:
-            app.logger.error(f"Could not update DynamoDB with error state for job {job_id}: {db_error}")
-
+        app.logger.error(f"Error during upload: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'An unexpected server error occurred during upload.'}), 500
     finally:
         if os.path.exists(local_filepath):
             os.remove(local_filepath)
+# --- END REPLACED FUNCTION ---
 
 
 @app.route('/status/<job_id>')
