@@ -38,6 +38,12 @@
             border-radius: 5px;
             margin-top: 15px;
         }
+        .schedule-group {
+            border: 1px dashed #ccc;
+            padding: 10px;
+            margin-top: 15px;
+            background-color: #fcfcfc;
+        }
     </style>
 </head>
 <body>
@@ -45,7 +51,6 @@
         <h1>RMIT Marketing Ad URL Uploader</h1>
         <p>The first column of your file should contain the URLs to be checked.</p>
         
-        <!-- ✅ NEW NOTE ABOUT DOMAIN RULE -->
         <p class="note"><strong>Important:</strong> Only URLs from the <code>rmit.edu.au</code> domain will be processed. All other URLs will be skipped.</p>
         
         <form id="upload-form" enctype="multipart/form-data">
@@ -56,6 +61,20 @@
             <label for="file">File to Process (.xlsx or .csv):</label>
             <input type="file" id="file" name="file" accept=".xlsx,.csv" required>
             <br><br>
+
+            <div class="schedule-group">
+                <h3><input type="checkbox" id="enable-schedule"> Schedule Daily Recurring Job</h3>
+                <div id="schedule-options" style="display:none;">
+                    <label for="schedule-start-date">Start Date:</label><br>
+                    <input type="date" id="schedule-start-date" name="schedule_start_date"><br><br>
+                    
+                    <label for="schedule-end-date">End Date:</label><br>
+                    <input type="date" id="schedule-end-date" name="schedule_end_date"><br><br>
+
+                    <label for="schedule-process-time">Time to Process (UTC):</label><br>
+                    <input type="time" id="schedule-process-time" name="schedule_process_time"><br><br>
+                </div>
+            </div>
 
             <input type="submit" value="Upload and Process">
         </form>
@@ -72,19 +91,22 @@
         <a id="download-link">Download the updated file</a>
         <button id="reset-button">Process Another File</button>
 
-        <!-- ✅ NEW NOTE ABOUT SCHEDULING AND EMAIL -->
         <p class="note" style="margin-top: 20px;">
             A copy of the processed file has been sent to your email. This file is now scheduled to be checked automatically every day at 3 AM.
         </p>
     </div>
 
     <script>
+    document.getElementById('enable-schedule').addEventListener('change', function() {
+        const scheduleOptions = document.getElementById('schedule-options');
+        scheduleOptions.style.display = this.checked ? 'block' : 'none';
+    });
+
     document.getElementById('upload-form').addEventListener('submit', async function(event) {
         event.preventDefault();
         const form = event.target;
         const formData = new FormData(form);
 
-        // --- UI Element References ---
         const formContainer = document.getElementById('form-container');
         const progressContainer = document.getElementById('progress-container');
         const downloadArea = document.getElementById('download-area');
@@ -95,7 +117,6 @@
 
         let pollingInterval;
 
-        // --- Reset and Show Progress UI ---
         formContainer.style.display = 'none';
         progressContainer.style.display = 'block';
         downloadArea.style.display = 'none';
@@ -104,7 +125,6 @@
         skippedMessage.style.display = 'none';
 
         try {
-            // 1. Upload the file and get the Job ID
             const uploadResponse = await fetch('/upload', { method: 'POST', body: formData });
             const uploadResult = await uploadResponse.json();
 
@@ -115,7 +135,6 @@
             progressStatus.textContent = 'File accepted. Waiting for processing to start...';
             const jobId = uploadResult.job_id;
 
-            // 2. Start polling for status updates
             pollingInterval = setInterval(async () => {
                 try {
                     const statusResponse = await fetch(`/status/${jobId}`);
@@ -136,7 +155,6 @@
                         clearInterval(pollingInterval);
                         progressStatus.textContent = `All ${data.total_urls || 0} rows have been processed!`;
                         
-                        // Handle the skipped message
                         if (data.skipped_urls && data.skipped_urls > 0) {
                             const totalUrls = data.total_urls || 0;
                             if (data.skipped_urls === totalUrls) {
