@@ -44,6 +44,10 @@
             margin-top: 15px;
             background-color: #fcfcfc;
         }
+        label[for="schedule-process-time2"] {
+            font-style: italic, Bold;
+            font-size: smaller;
+        }
     </style>
 </head>
 <body>
@@ -72,6 +76,7 @@
                     <input type="date" id="schedule-end-date" name="schedule_end_date"><br><br>
 
                     <label for="schedule-process-time">Time to Process (UTC):</label><br>
+                    <label for="schedule-process-time2">*Note: schedule process will happen 7 hours from set time as it is in UTC time. Bare in mind the time difference when providing desired time*</label><br>
                     <input type="time" id="schedule-process-time" name="schedule_process_time"><br><br>
                 </div>
             </div>
