@@ -7,15 +7,12 @@ from werkzeug.utils import secure_filename
 from botocore.exceptions import ClientError
 import datetime as dt
 
-# --- Configuration ---
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 S3_SOURCE_PREFIX = "source/"
 S3_PROCESSED_PREFIX = "processed/"
-
-# --- AWS Clients ---
-AWS_REGION = "ap-southeast-2"  # Ensure it matches your AWS region
+AWS_REGION = "ap-southeast-2"  
 
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
@@ -36,8 +33,6 @@ def index():
     """Render the upload form page."""
     return render_template('index.html')
 
-
-# --- REPLACED /upload FUNCTION BELOW ---
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload, creating an immediate job AND a recurring schedule if requested."""
@@ -63,10 +58,9 @@ def upload_file():
         s3_key = f"{S3_SOURCE_PREFIX}{filename}"
         s3_client.upload_file(local_filepath, S3_BUCKET_NAME, s3_key)
 
-        job_id_for_polling = None  # ID for frontend polling
+        job_id_for_polling = None  
 
         if is_scheduled and start_date and end_date and process_time:
-            # --- Create schedule template ---
             schedule_id = str(uuid.uuid4())
             schedule_item = {
                 'job_id': schedule_id,
@@ -81,8 +75,7 @@ def upload_file():
                 'upload_time': dt.datetime.utcnow().isoformat()
             }
             progress_table.put_item(Item=schedule_item)
-            
-            # --- Create immediate job run ---
+
             initial_run_id = str(uuid.uuid4())
             run_item = {
                 'job_id': initial_run_id,
@@ -94,8 +87,6 @@ def upload_file():
                 'upload_time': dt.datetime.utcnow().isoformat()
             }
             progress_table.put_item(Item=run_item)
-
-            # --- Trigger Lambda via S3 metadata update ---
             s3_client.copy_object(
                 Bucket=S3_BUCKET_NAME,
                 Key=s3_key,
@@ -108,7 +99,6 @@ def upload_file():
             message = f"File accepted. Processing now and scheduled to run daily from {start_date} to {end_date}."
         
         else:
-            # --- Standard one-time on-demand job ---
             on_demand_job_id = str(uuid.uuid4())
             item = {
                 'job_id': on_demand_job_id,
@@ -142,8 +132,6 @@ def upload_file():
     finally:
         if os.path.exists(local_filepath):
             os.remove(local_filepath)
-# --- END REPLACED FUNCTION ---
-
 
 @app.route('/status/<job_id>')
 def get_status(job_id):
