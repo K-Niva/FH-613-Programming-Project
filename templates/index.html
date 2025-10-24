@@ -1,8 +1,8 @@
+<!-- Save this in your templates folder as index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="robots" content="noindex, nofollow" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>URL Status Checker</title>
     <style>
@@ -46,7 +46,8 @@
             background-color: #fcfcfc;
         }
         label[for="schedule-process-time2"] {
-            font-style: italic, Bold;
+            font-style: italic;
+            font-weight: bold;
             font-size: smaller;
         }
     </style>
@@ -60,7 +61,6 @@
         
         <form id="upload-form" enctype="multipart/form-data">
             <label for="email">Recipient Email:</label>
-            <label for="email">(only the email "rmitaiteam@gmail.com is allowed)</label>
             <input type="email" id="email" name="email" required style="width: 95%; padding: 8px;">
             <br><br>
 
@@ -133,11 +133,17 @@
 
         try {
             const uploadResponse = await fetch('/upload', { method: 'POST', body: formData });
-            const uploadResult = await uploadResponse.json();
-
-            if (!uploadResult.success) {
-                throw new Error(uploadResult.message || 'The server rejected the file upload.');
+            
+            // --- MODIFIED: This block now correctly handles immediate rejection ---
+            // The fetch API doesn't throw an error for HTTP statuses like 400 or 500.
+            // We must check the 'ok' property of the response ourselves.
+            if (!uploadResponse.ok) {
+                const errorData = await uploadResponse.json(); // Get the JSON body from our Flask error
+                throw new Error(errorData.message || `Server responded with status: ${uploadResponse.status}`);
             }
+            // --- End of modification ---
+
+            const uploadResult = await uploadResponse.json();
 
             progressStatus.textContent = 'File accepted. Waiting for processing to start...';
             const jobId = uploadResult.job_id;
@@ -155,7 +161,7 @@
                     if (jobStatus === 'PROCESSING') {
                         const total = data.total_urls || 0;
                         const processed = data.processed_urls || 0;
-                        progressStatus.textContent = `${processed} / ${total} has been processed`;
+                        progressStatus.textContent = `${processed} / ${total} URLs have been processed`;
                     }
 
                     if (jobStatus === 'COMPLETE') {
@@ -195,14 +201,26 @@
             
             progressContainer.style.display = 'none';
             downloadArea.style.display = 'block';
-            downloadArea.querySelector('h3').textContent = 'Failed!';
-            downloadLink.style.display = 'none';
-            messageLog.innerHTML = `<p style="color: red;"><strong>Error:</strong> ${error.message}</p>`;
-            downloadArea.prepend(messageLog);
+            
+            // Re-use the error template to display the message
+            const errorTemplate = document.getElementById('error-template').content.cloneNode(true);
+            errorTemplate.querySelector('#error-message-text').textContent = error.message;
+            errorTemplate.querySelector('#reset-button-error').addEventListener('click', () => location.reload());
+
+            downloadArea.innerHTML = ''; // Clear previous content
+            downloadArea.appendChild(errorTemplate);
         }
     });
 
     document.getElementById('reset-button').addEventListener('click', () => location.reload());
     </script>
+
+    <!-- Template for error display (no changes needed here) -->
+    <template id="error-template">
+        <h3>An Error Occurred!</h3>
+        <p id="error-message-text" style="color: red; background-color: #fdedec; padding: 10px; border: 1px solid #fadbd8; border-radius: 5px;"></p>
+        <button id="reset-button-error">Try Another File</button>
+    </template>
 </body>
+</html></body>
 </html>
