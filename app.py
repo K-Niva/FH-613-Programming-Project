@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 from botocore.exceptions import ClientError
 import datetime as dt
 
-# --- Configuration ---
+
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'csv'}
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
@@ -15,17 +15,12 @@ S3_SOURCE_PREFIX = "source/"
 S3_PROCESSED_PREFIX = "processed/"
 AWS_REGION = "ap-southeast-2"  
 
-# --- ADDED: Read allowed recipients from environment variables ---
-# This list is now used for immediate validation.
-# Make sure this environment variable is set where you run your Flask app.
 ALLOWED_RECIPIENTS = os.getenv("ALLOWED_RECIPIENTS", "").split(',')
 
-# --- AWS Clients ---
 s3_client = boto3.client("s3", region_name=AWS_REGION)
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 progress_table = dynamodb.Table('url-processing-jobs')
 
-# --- Flask App Initialization ---
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -53,16 +48,13 @@ def upload_file():
     if not file.filename or not email or not allowed_file(file.filename):
         return jsonify({'success': False, 'message': 'Invalid file or email provided.'}), 400
 
-    # --- ADDED: Immediate email validation logic ---
-    # We check the email against the allowed list before doing anything else.
     if not email or email.lower() not in [e.lower().strip() for e in ALLOWED_RECIPIENTS]:
         app.logger.warning(f"Rejected upload attempt for unauthorized email: {email}")
         return jsonify({
             'success': False,
             'message': f"Unauthorized recipient email provided: '{email}'. This is not a valid email address. Please make sure it is an authorized email."
-        }), 400 # 400 Bad Request is an appropriate status code
+        }), 400 
 
-    # --- The rest of the function only runs if the email is valid ---
     is_scheduled = request.form.get('enable-schedule')
     start_date = request.form.get('schedule_start_date')
     end_date = request.form.get('schedule_end_date')
