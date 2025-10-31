@@ -70,10 +70,10 @@ This application’s infrastructure is isolated within a custom VPC named RMIT-A
 The web application front-end and backend server are hosted on a single t3.medium EC2 instance named RMIT-Google-Ads-AI-2025-Server. 
 
 *   **EC2 Instance Summary:**
-    <img src="./images/ec2_s1.png" alt="EC2 Instance Summary" width="700">
+    <img src="./images/ec2_1.png" alt="EC2 Instance Summary" width="700">
 
 *   **EC2 Security Details:**
-    <img src="./images/ec2_s2.png" alt="EC2 Security Details" width="700">
+    <img src="./images/ec2_2.png" alt="EC2 Security Details" width="700">
 
 #### Amazon S3 + DynamoDB: 
 *   **Amazon S3 ->** The rmit-url-scan-data bucket serves as the primary storage for data for the application. 
@@ -82,7 +82,7 @@ The web application front-end and backend server are hosted on a single t3.mediu
         <img src="./images/s3.png" alt="S3 Bucket Structure" width="700">
 
     *   **S3 Access Control:**
-        <img src="./images/s3_s2.png" alt="S3 Access Control" width="700">
+        <img src="./images/s3_2.png" alt="S3 Access Control" width="700">
 
 *   **DynamoDB ->** A NoSQL table named url-processing-jobs offers a historical log of all scan activities. 
 
@@ -96,35 +96,35 @@ The core automation and data processing data tasks are managed by several server
 *   **Overview:**
     <img src="./images/lambda.png" alt="Lambda Main Overview" width="700">
 *   **Code properties + Layers:**
-    <img src="./images/lambda_s2.png" alt="Lambda Main Code Properties" width="700">
+    <img src="./images/lambda_2.png" alt="Lambda Main Code Properties" width="700">
 *   **Timeout + Memory Config:**
-    <img src="C:\Users\harsh\FH-613-Programming-Project\FH-613-Programming-Project\Screenshots for ReadMe/lambda_s3.png" alt="Lambda Main Configuration" width="700">
+    <img src="./images/lambda_3.png" alt="Lambda Main Configuration" width="700">
 *   **Environment variables:**
-    <img src="./images/lambda_s4.png" alt="Lambda Main Environment Variables" width="700">
+    <img src="./images/lambda_4.png" alt="Lambda Main Environment Variables" width="700">
 *   **Execution Role permissions:**
-    <img src="./images/lambda_s5.png" alt="Lambda Main Execution Role" width="700">
+    <img src="./images/lambda_5.png" alt="Lambda Main Execution Role" width="700">
 
 **Scheduler Function: `url-job-scheduler2025`**
 This function was made to be the target of a schedule trigger, responsible for starting the overall job workflow. 
 
 *   **Overview:**
-    <img src="./images/lambda_s6.png" alt="Lambda Scheduler Overview" width="700">
+    <img src="./images/lambda_6.png" alt="Lambda Scheduler Overview" width="700">
 *   **Timeout + Memory Config:**
-    <img src="./images/lambda_s7.png" alt="Lambda Scheduler Configuration" width="700">
+    <img src="./images/lambda_7.png" alt="Lambda Scheduler Configuration" width="700">
 *   **Code properties:**
-    <img src="./images/lambda_s8.png" alt="Lambda Scheduler Code Properties" width="700">
+    <img src="./images/lambda_8.png" alt="Lambda Scheduler Code Properties" width="700">
 *   **Execution Role permissions:**
-    <img src="./images/lambda_s9.png" alt="Lambda Scheduler Execution Role" width="700">
+    <img src="./images/lambda_9.png" alt="Lambda Scheduler Execution Role" width="700">
 
 **File Processing Function: `FileProcessingLambda2025`**
 This function manages the validation and processing of the newly uploaded .xlsx file in the S3 bucket. 
 
 *   **Overview:**
-    <img src="./images/lambda_s10.png" alt="Lambda FileProcessing Overview" width="700">
+    <img src="./images/lambda_10.png" alt="Lambda FileProcessing Overview" width="700">
 *   **Code properties:**
-    <img src="./images/lambda_s11.png" alt="Lambda FileProcessing Code Properties" width="700">
+    <img src="./images/lambda_11.png" alt="Lambda FileProcessing Code Properties" width="700">
 *   **Timeout + Memory Config:**
-    <img src="./images/lambda_s12.png" alt="Lambda FileProcessing Configuration" width="700">
+    <img src="./images/lambda_12.png" alt="Lambda FileProcessing Configuration" width="700">
 
 #### AWS EventBridge:
 It is used to automate the entire process. 
