@@ -291,7 +291,7 @@ sudo systemctl restart nginx
 ```
 
 **Verify the Application is Running:**
-Open your web browser and navigate to `http://<your_ec2_ip_address>`. You should see the index.html page.
+Open your web browser and navigate to `http://3.24.74.191`. You should see the index.html page.
 
 ---
 
